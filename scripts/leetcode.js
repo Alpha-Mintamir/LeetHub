@@ -55,6 +55,10 @@ function findLanguage() {
   return null;
 }
 
+const getFolderName = (username) => {
+  return username.replace(/[^a-zA-Z0-9_]/g, '_');
+};
+
 /* Main function for uploading code to GitHub repo, and callback cb is called if success */
 const upload = (
   token,
@@ -66,63 +70,112 @@ const upload = (
   msg,
   cb = undefined,
 ) => {
-  // To validate user, load user object from GitHub.
-  const URL = `https://api.github.com/repos/${hook}/contents/${directory}/${filename}`;
+  chrome.storage.local.get(['leethub_username', 'leetcode_username'], (data) => {
+    const githubUsername = data.leethub_username;
+    const leetcodeUsername = data.leetcode_username;
+    const folderName = getFolderName(leetcodeUsername);
+    
+    // Modified URL to use the correct folder structure
+    const URL = `https://api.github.com/repos/${hook}/contents/${folderName}/${directory}/${filename}`;
 
-  /* Define Payload */
-  let data = {
-    message: msg,
-    content: code,
-    sha,
-  };
+    // Check if folder exists, if not create it
+    checkAndCreateFolder(token, hook, folderName).then(() => {
+      // First, try to get the ref for user's branch
+      const branchURL = `https://api.github.com/repos/${hook}/git/refs/heads/${githubUsername}`;
+      
+      const createBranch = (defaultBranch) => {
+        const branchData = {
+          ref: `refs/heads/${githubUsername}`,
+          sha: defaultBranch.object.sha
+        };
+        
+        const branchXhr = new XMLHttpRequest();
+        branchXhr.open('POST', `https://api.github.com/repos/${hook}/git/refs`, true);
+        branchXhr.setRequestHeader('Authorization', `token ${token}`);
+        branchXhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
+        branchXhr.send(JSON.stringify(branchData));
+      };
 
-  data = JSON.stringify(data);
-
-  const xhr = new XMLHttpRequest();
-  xhr.addEventListener('readystatechange', function () {
-    if (xhr.readyState === 4) {
-      if (xhr.status === 200 || xhr.status === 201) {
-        const updatedSha = JSON.parse(xhr.responseText).content.sha; // get updated SHA.
-
-        chrome.storage.local.get('stats', (data2) => {
-          let { stats } = data2;
-          if (stats === null || stats === {} || stats === undefined) {
-            // create stats object
-            stats = {};
-            stats.solved = 0;
-            stats.easy = 0;
-            stats.medium = 0;
-            stats.hard = 0;
-            stats.sha = {};
+      // Check if user branch exists, create if it doesn't
+      const branchXhr = new XMLHttpRequest();
+      branchXhr.addEventListener('readystatechange', function () {
+        if (branchXhr.readyState === 4) {
+          if (branchXhr.status === 404) {
+            // Branch doesn't exist - get default branch and create user branch
+            const defaultBranchXhr = new XMLHttpRequest();
+            defaultBranchXhr.open('GET', `https://api.github.com/repos/${hook}/git/refs/heads/main`, true);
+            defaultBranchXhr.setRequestHeader('Authorization', `token ${token}`);
+            defaultBranchXhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
+            defaultBranchXhr.onload = function() {
+              const defaultBranch = JSON.parse(defaultBranchXhr.responseText);
+              createBranch(defaultBranch);
+            };
+            defaultBranchXhr.send();
           }
-          const filePath = directory + filename;
-          // Only increment solved problems statistics once
-          // New submission commits twice (README and problem)
-          if (filename === 'README.md' && sha === null) {
-            stats.solved += 1;
-            stats.easy += difficulty === 'Easy' ? 1 : 0;
-            stats.medium += difficulty === 'Medium' ? 1 : 0;
-            stats.hard += difficulty === 'Hard' ? 1 : 0;
-          }
-          stats.sha[filePath] = updatedSha; // update sha key.
-          chrome.storage.local.set({ stats }, () => {
-            console.log(
-              `Successfully committed ${filename} to github`,
-            );
+        }
+      });
+      branchXhr.open('GET', branchURL, true);
+      branchXhr.setRequestHeader('Authorization', `token ${token}`);
+      branchXhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
+      branchXhr.send();
 
-            // if callback is defined, call it
-            if (cb !== undefined) {
-              cb();
-            }
-          });
-        });
-      }
-    }
+      /* Define Payload */
+      let data = {
+        message: msg,
+        content: code,
+        sha,
+        branch: 'main'  // We're using main branch since folders separate the users
+      };
+
+      data = JSON.stringify(data);
+
+      const xhr = new XMLHttpRequest();
+      xhr.addEventListener('readystatechange', function () {
+        if (xhr.readyState === 4) {
+          if (xhr.status === 200 || xhr.status === 201) {
+            const updatedSha = JSON.parse(xhr.responseText).content.sha; // get updated SHA.
+
+            chrome.storage.local.get('stats', (data2) => {
+              let { stats } = data2;
+              if (stats === null || stats === undefined || (typeof stats === 'object' && Object.keys(stats).length === 0)) {
+                // create stats object
+                stats = {};
+                stats.solved = 0;
+                stats.easy = 0;
+                stats.medium = 0;
+                stats.hard = 0;
+                stats.sha = {};
+              }
+              const filePath = directory + filename;
+              // Only increment solved problems statistics once
+              // New submission commits twice (README and problem)
+              if (filename === 'README.md' && sha === null) {
+                stats.solved += 1;
+                stats.easy += difficulty === 'Easy' ? 1 : 0;
+                stats.medium += difficulty === 'Medium' ? 1 : 0;
+                stats.hard += difficulty === 'Hard' ? 1 : 0;
+              }
+              stats.sha[filePath] = updatedSha; // update sha key.
+              chrome.storage.local.set({ stats }, () => {
+                console.log(
+                  `Successfully committed ${filename} to github`,
+                );
+
+                // if callback is defined, call it
+                if (cb !== undefined) {
+                  cb();
+                }
+              });
+            });
+          }
+        }
+      });
+      xhr.open('PUT', URL, true);
+      xhr.setRequestHeader('Authorization', `token ${token}`);
+      xhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
+      xhr.send(data);
+    });
   });
-  xhr.open('PUT', URL, true);
-  xhr.setRequestHeader('Authorization', `token ${token}`);
-  xhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
-  xhr.send(data);
 };
 
 /* Main function for updating code on GitHub Repo */
@@ -824,3 +877,46 @@ function injectStyle() {
     '.leethub_progress {pointer-events: none;width: 2.0em;height: 2.0em;border: 0.4em solid transparent;border-color: #eee;border-top-color: #3E67EC;border-radius: 50%;animation: loadingspin 1s linear infinite;} @keyframes loadingspin { 100% { transform: rotate(360deg) }}';
   document.head.append(style);
 }
+
+const checkAndCreateFolder = (token, hook, folderName) => {
+  return new Promise((resolve, reject) => {
+    const folderCheckURL = `https://api.github.com/repos/${hook}/contents/${folderName}`;
+    
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', folderCheckURL, true);
+    xhr.setRequestHeader('Authorization', `token ${token}`);
+    
+    xhr.onload = function() {
+      if (xhr.status === 404) {
+        // Folder doesn't exist, create it with a README
+        createFolder(token, hook, folderName)
+          .then(resolve)
+          .catch(reject);
+      } else {
+        resolve(); // Folder exists
+      }
+    };
+    xhr.send();
+  });
+};
+
+const createFolder = (token, hook, folderName) => {
+  const createURL = `https://api.github.com/repos/${hook}/contents/${folderName}/README.md`;
+  
+  const data = {
+    message: `Create folder for ${folderName}`,
+    content: btoa(`# LeetCode Solutions for ${folderName}`),
+    branch: 'main'
+  };
+  
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', createURL, true);
+    xhr.setRequestHeader('Authorization', `token ${token}`);
+    xhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
+    xhr.send(JSON.stringify(data));
+    
+    xhr.onload = () => resolve();
+    xhr.onerror = () => reject();
+  });
+};

@@ -98,6 +98,14 @@ const createRepo = (token, name) => {
   xhr.setRequestHeader('Authorization', `token ${token}`);
   xhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
   xhr.send(data);
+
+  chrome.storage.local.get('leethub_username', (data) => {
+    if (!data.leethub_username) {
+      // Prompt user for username or get from GitHub profile
+      const username = prompt('Please enter your LeetCode username:');
+      chrome.storage.local.set({ leethub_username: username });
+    }
+  });
 };
 
 /* Status codes for linking of repo */
@@ -241,58 +249,29 @@ $('#type').on('change', function () {
 });
 
 $('#hook_button').on('click', () => {
-  /* on click should generate: 1) option 2) repository name */
-  if (!option()) {
-    $('#error').text(
-      'No option selected - Pick an option from dropdown menu below that best suits you!',
-    );
-    $('#error').show();
-  } else if (!repositoryName()) {
-    $('#error').text(
-      'No repository name added - Enter the name of your repository!',
-    );
-    $('#name').focus();
-    $('#error').show();
-  } else {
-    $('#error').hide();
-    $('#success').text('Attempting to create Hook... Please wait.');
-    $('#success').show();
-
-    /* 
-      Perform processing
-      - step 1: Check if current stage === hook.
-      - step 2: store repo name as repoName in chrome storage.
-      - step 3: if (1), POST request to repoName (iff option = create new repo) ; else display error message.
-      - step 4: if proceed from 3, hide hook_mode and display commit_mode (show stats e.g: files pushed/questions-solved/leaderboard)
-    */
-    chrome.storage.local.get('leethub_token', (data) => {
-      const token = data.leethub_token;
-      if (token === null || token === undefined) {
-        /* Not authorized yet. */
-        $('#error').text(
-          'Authorization error - Grant LeetHub access to your GitHub account to continue (launch extension to proceed)',
-        );
-        $('#error').show();
-        $('#success').hide();
-      } else if (option() === 'new') {
-        createRepo(token, repositoryName());
-      } else {
-        chrome.storage.local.get('leethub_username', (data2) => {
-          const username = data2.leethub_username;
-          if (!username) {
-            /* Improper authorization. */
-            $('#error').text(
-              'Improper Authorization error - Grant LeetHub access to your GitHub account to continue (launch extension to proceed)',
-            );
-            $('#error').show();
-            $('#success').hide();
-          } else {
-            linkRepo(token, `${username}/${repositoryName()}`, false);
-          }
-        });
-      }
-    });
-  }
+  chrome.storage.local.get(['leethub_token', 'leethub_username'], (data) => {
+    const token = data.leethub_token;
+    const username = data.leethub_username;
+    
+    // First check org membership
+    checkOrgMembership(token, username)
+      .then(() => {
+        // Prompt for LeetCode username
+        const leetcodeUsername = prompt('Enter your LeetCode username:');
+        if (leetcodeUsername) {
+          chrome.storage.local.set({ 
+            leetcode_username: leetcodeUsername,
+            leethub_hook: 'ISHUBTEAM/IS-Leetcoders'  // Set fixed repository
+          }, () => {
+            // Continue with setup
+            $('#success').text('Successfully configured!');
+          });
+        }
+      })
+      .catch((error) => {
+        $('#error').text('You must be a member of ISHUBTEAM organization to use this extension');
+      });
+  });
 });
 
 $('#unlink a').on('click', () => {

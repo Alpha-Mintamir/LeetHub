@@ -108,3 +108,23 @@ if (window.location.host === 'github.com') {
     }
   });
 }
+
+const checkOrgMembership = (token, username) => {
+  const orgCheckURL = 'https://api.github.com/orgs/ISHUBTEAM/members/' + username;
+  
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', orgCheckURL, true);
+    xhr.setRequestHeader('Authorization', `token ${token}`);
+    xhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
+    
+    xhr.onload = function() {
+      if (xhr.status === 204) { // User is a member
+        resolve(true);
+      } else {
+        reject('User is not a member of ISHUBTEAM organization');
+      }
+    };
+    xhr.send();
+  });
+};
